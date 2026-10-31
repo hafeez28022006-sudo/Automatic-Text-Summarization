@@ -9,4 +9,4 @@ wikipedia
 attr
 numpy
 scipy
-summa
+git+https://github.com/summanlp/textrank.git
