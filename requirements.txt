@@ -7,4 +7,6 @@ pytextrank
 matplotlib
 wikipedia
 attr
+numpy
+scipy
 summa
