@@ -1,0 +1,9 @@
+streamlit
+transformers
+torch
+spacy
+scikit-learn
+pytextrank
+matplotlib
+wikipedia
+attr
