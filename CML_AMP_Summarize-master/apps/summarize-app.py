@@ -62,22 +62,24 @@ MODELS = (
 )
 
 # Global versions for caching
-@st.cache(allow_output_mutation=True)
-def load_model(model):
-    return model.load()
+@st.cache_resource
+def load_model(_model):
+    return _model.load()
 
 # Global versions for caching
-@st.cache(allow_output_mutation=True)
-def summarize_text(article, model):
-    return model.summarize(article, load_model(model))
+@st.cache_resource
+def summarize_text(article, _model):
+    return _model.summarize(article, load_model(_model))
 
-@st.cache(allow_output_mutation=True)
+@st.cache_data
 def load_data(selection):
     if selection == "wiki":
         return pd.read_csv("data/wikipedia/ml_excerpts.pd")
     elif selection == "cnn":
-        return pd.read_csv("data/cnn_dailymail/sAMPle.pd")
+        return pd.read_csv("data/cnn_dailymail/sAMPLE.pd")
 
+
+    
 def make_bar_chart(df, idx, model_name):
     labels = ['Neural Abstractive', 'Neural Extractive', 'Classic Extractive', 'Hybrid Extractive']
     values = df[labels].iloc[idx].values
