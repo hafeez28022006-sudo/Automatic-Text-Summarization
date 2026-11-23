@@ -28,7 +28,14 @@ MODELS = (
     hybrid_extractive,
 )
 
-# Clean, minimal responsive CSS that never blocks clicks on mobile or desktop
+SAMPLE_CUSTOM_TEXT = (
+    "Natural language processing enables computers to understand, interpret, and generate human language. "
+    "Modern NLP systems combine neural networks, transformer architectures, and statistical ranking methods "
+    "to power translation, question answering, sentiment analysis, and automatic text summarization. "
+    "Extractive approaches select key sentences directly from the source text, while abstractive approaches "
+    "generate concise new phrasing that captures the core ideas."
+)
+
 st.markdown(
     """
     <style>
@@ -77,7 +84,7 @@ def _split_sentences(doc: str):
     return parts if parts else ([doc.strip()] if doc.strip() else [])
 
 
-def _fallback_extractive_summary(doc: str) -> str:
+def _fallback_extractive_summary(doc: str, num_sentences: int = 3) -> str:
     cleaned = doc.strip()
     if not cleaned:
         return ""
@@ -86,18 +93,19 @@ def _fallback_extractive_summary(doc: str) -> str:
 
         out = summa_summarize(cleaned, ratio=0.4)
         if out and out.strip():
-            return out.strip()
+            sentences = _split_sentences(out.strip())
+            return " ".join(sentences[: max(1, num_sentences)])
     except Exception:
         pass
 
     sentences = _split_sentences(cleaned)
-    if len(sentences) <= 1:
-        return cleaned
+    if len(sentences) <= num_sentences:
+        return " ".join(sentences)
     lead = sentences[0]
     others = sorted(sentences[1:], key=lambda s: len(s.split()), reverse=True)
-    picked = [lead]
-    if others:
-        picked.append(others[0])
+    picked = {lead}
+    for s in others[: max(0, num_sentences - 1)]:
+        picked.add(s)
     ordered = [s for s in sentences if s in picked]
     return " ".join(ordered)
 
@@ -130,16 +138,15 @@ def _rewrite_clause_abstractive(sentence: str) -> str:
     return main_part[:1].upper() + main_part[1:] + "."
 
 
-def _fallback_abstractive_summary(doc: str) -> str:
+def _fallback_abstractive_summary(doc: str, max_words: int = 80) -> str:
     cleaned = doc.strip()
     if not cleaned:
         return ""
     summarizer = _get_hf_summarizer()
     if summarizer is not None and len(cleaned.split()) >= 25:
         try:
-            words = len(cleaned.split())
-            max_len = min(130, max(20, int(words * 0.5)))
-            min_len = min(15, max(5, max_len // 2))
+            max_len = min(140, max(25, int(max_words * 1.35)))
+            min_len = min(20, max(5, max_len // 3))
             result = summarizer(
                 cleaned[:3500],
                 max_length=max_len,
@@ -154,11 +161,14 @@ def _fallback_abstractive_summary(doc: str) -> str:
             pass
 
     sentences = _split_sentences(cleaned)
-    condensed = [_rewrite_clause_abstractive(s) for s in sentences[:3]]
-    return " ".join(condensed)
+    condensed = [_rewrite_clause_abstractive(s) for s in sentences[:4]]
+    out = " ".join(condensed)
+    words = out.split()
+    if len(words) > max_words:
+        out = " ".join(words[:max_words]).rstrip(",;") + "."
+    return out
 
 
-# Global versions for caching
 @st.cache_resource
 def load_model(_model):
     return _model.load()
@@ -175,24 +185,25 @@ def summarize_text(article: str, _model) -> str:
 
 
 @st.cache_data(show_spinner=False)
-def run_custom_mode_summary(doc: str, mode: str) -> str:
+def run_custom_mode_summary(doc: str, mode: str, num_sentences: int = 3, max_words: int = 80) -> str:
     if mode == "Abstractive":
         try:
             out = abstractive.summarize(doc, load_model(abstractive))
-            if out and out.strip() and out.strip() != _fallback_extractive_summary(doc):
+            if out and out.strip() and out.strip() != _fallback_extractive_summary(doc, num_sentences):
                 return out.strip()
         except Exception:
             pass
-        return _fallback_abstractive_summary(doc)
+        return _fallback_abstractive_summary(doc, max_words=max_words)
     else:
         for ext_model in (classic_extractive, hybrid_extractive, modern_extractive):
             try:
                 out = ext_model.summarize(doc, load_model(ext_model))
                 if out and out.strip():
-                    return out.strip()
+                    sents = _split_sentences(out.strip())
+                    return " ".join(sents[: max(1, num_sentences)])
             except Exception:
                 continue
-        return _fallback_extractive_summary(doc)
+        return _fallback_extractive_summary(doc, num_sentences=num_sentences)
 
 
 @st.cache_data
@@ -223,6 +234,20 @@ def make_bar_chart(df: pd.DataFrame, idx: int, model_name: str):
     return fig
 
 
+def _render_summary_metrics_and_download(summary_text_value: str, source_text: str, filename_prefix: str):
+    src_words = len(source_text.split()) if source_text else 0
+    sum_words = len(summary_text_value.split()) if summary_text_value else 0
+    ratio = round((sum_words / src_words) * 100, 1) if src_words > 0 else 0.0
+    st.caption(f"Words: {sum_words} / {src_words} ({ratio}% of input)")
+    if summary_text_value:
+        st.download_button(
+            label="Download Summary (.txt)",
+            data=summary_text_value,
+            file_name=f"{filename_prefix.lower().replace(' ', '_')}_summary.txt",
+            mime="text/plain",
+        )
+
+
 def render_single_model_view(summary_text_value: str, source_text: str, title_label: str):
     bottom_left, bottom_right = st.columns(2)
     bottom_left.markdown("## Original text (summary highlighted)")
@@ -239,6 +264,8 @@ def render_single_model_view(summary_text_value: str, source_text: str, title_la
 
     bottom_right.markdown(f"## {title_label} Summary")
     bottom_right.write(f"\n{summary_text_value}")
+    with bottom_right:
+        _render_summary_metrics_and_download(summary_text_value, source_text, title_label)
     return bottom_right
 
 
@@ -254,7 +281,6 @@ st.sidebar.markdown(
     "[blog](https://blog.fastforwardlabs.com/2021/09/22/automatic-summarization-from-textrank-to-transformers.html)."
 )
 
-# ----- Model Selection -----
 model_selector = {m.display_name: m for m in MODELS}
 model_obj = model_selector[
     st.sidebar.selectbox("Choose a summarization model.", list(model_selector.keys()))
@@ -263,12 +289,9 @@ st.sidebar.markdown("#### Model description")
 st.sidebar.markdown(model_obj.description, unsafe_allow_html=True)
 
 # ============ MAIN PAGE ============
-
-# ----- Display ToC and Text Box -----
 top_left, top_right = st.columns(2)
 top_left.title("Summarize.")
 
-# ----- Text Selection -----
 text_options = {
     "Excerpts from Wikipedia page on Machine Learning": "wiki",
     "Articles from the CNN/Daily News dataset": "cnn",
@@ -276,33 +299,52 @@ text_options = {
 text_selection = top_left.selectbox("Choose a dataset.", list(text_options.keys()))
 text_selection = text_options[text_selection]
 
-# ----- Load Stuff -----
 if text_selection == "wiki":
     df = load_data(text_selection)
     df.fillna("", inplace=True)
-    text_options = {r.heading: i for i, r in df.iterrows()}
+    excerpt_options = {r.heading: i for i, r in df.iterrows()}
     top_left.subheader("Table of Contents")
     selection = top_left.selectbox(
-        "Choose an excerpt to summarize.", list(text_options.keys())
+        "Choose an excerpt to summarize.", list(excerpt_options.keys())
     )
+    row_idx = excerpt_options[selection]
 else:
     df = load_data(text_selection)
-    text_options = {r.title: i for i, r in df.iterrows()}
+    article_options = {r.title: i for i, r in df.iterrows()}
+    top_left.subheader("Articles")
     selection = top_left.selectbox(
-        "Choose a news article.", list(text_options.keys())
+        "Choose a news article.", list(article_options.keys())
     )
+    row_idx = article_options[selection]
 
-row_idx = text_options[selection]
 article = df.iloc[row_idx]["article"]
-
 original = cleanup(article)
-text = top_right.text_area(
-    "Subection text -- or enter your own text to summarize!", article, height=300
-)
-text = cleanup(text)
 
-# ----- Display Highlighting & Results -----
-if text == original:
+# Sync custom editor state when dataset/row changes
+editor_key = "custom_text_editor"
+state_source_key = "last_loaded_article"
+if st.session_state.get(state_source_key) != article:
+    st.session_state[state_source_key] = article
+    st.session_state[editor_key] = article
+
+btn_col1, btn_col2, _ = top_right.columns([1, 1.2, 1.8])
+if btn_col1.button("Clear Text"):
+    st.session_state[editor_key] = ""
+    st.rerun()
+if btn_col2.button("Load Sample"):
+    st.session_state[editor_key] = SAMPLE_CUSTOM_TEXT
+    st.rerun()
+
+raw_text = top_right.text_area(
+    "Subection text -- or enter your own text to summarize!",
+    key=editor_key,
+    height=300,
+)
+text = cleanup(raw_text)
+
+if not text.strip():
+    st.info("Enter or paste your own text in the box above (or click **Load Sample**) to generate a summary.")
+elif text == original:
     summary = df.iloc[row_idx][model_obj.name + "_summary"]
     bottom_right = render_single_model_view(summary, text, model_obj.display_name)
 
@@ -322,22 +364,29 @@ if text == original:
         with bottom_right.expander("Qualitative Comparison"):
             st.markdown(df.iloc[row_idx]["commentary"])
 else:
-    custom_mode = top_right.radio(
+    ctrl_left, ctrl_right = top_right.columns([1.6, 1])
+    custom_mode = ctrl_left.radio(
         "Summary type for your custom text:",
         ["Extractive", "Abstractive", "Both (Extractive + Abstractive)"],
         horizontal=True,
     )
+    num_sentences = ctrl_right.slider("Sentences / target length", min_value=1, max_value=6, value=3)
+    max_words = max(35, num_sentences * 25)
 
     if custom_mode == "Both (Extractive + Abstractive)":
-        ext_summary = run_custom_mode_summary(text, "Extractive")
-        abs_summary = run_custom_mode_summary(text, "Abstractive")
+        ext_summary = run_custom_mode_summary(text, "Extractive", num_sentences=num_sentences, max_words=max_words)
+        abs_summary = run_custom_mode_summary(text, "Abstractive", num_sentences=num_sentences, max_words=max_words)
 
         col_ext, col_abs = st.columns(2)
         col_ext.markdown("## Extractive Summary")
         col_ext.write(ext_summary)
+        with col_ext:
+            _render_summary_metrics_and_download(ext_summary, text, "Extractive")
 
         col_abs.markdown("## Abstractive Summary")
         col_abs.write(abs_summary)
+        with col_abs:
+            _render_summary_metrics_and_download(abs_summary, text, "Abstractive")
     else:
-        summary = run_custom_mode_summary(text, custom_mode)
+        summary = run_custom_mode_summary(text, custom_mode, num_sentences=num_sentences, max_words=max_words)
         render_single_model_view(summary, text, custom_mode)
