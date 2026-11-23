@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 import matplotlib.pyplot as plt
 import pandas as pd
 import wikipedia as wiki
@@ -36,6 +37,51 @@ def _resolve_asset(rel_path: str) -> Path:
     return BASE_DIR / rel_path
 
 
+@st.cache_resource(show_spinner=False)
+def _get_hf_summarizer():
+    from transformers import pipeline
+
+    return pipeline("summarization", model="sshleifer/distilbart-cnn-12-6")
+
+
+def _fallback_extractive_summary(doc: str, num_sentences: int = 3) -> str:
+    try:
+        from summa.summarizer import summarize as summa_summarize
+
+        out = summa_summarize(doc, ratio=0.35)
+        if out and out.strip():
+            return out.strip()
+    except Exception:
+        pass
+
+    sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", doc.strip()) if s.strip()]
+    if not sentences:
+        return doc.strip()
+    return " ".join(sentences[:num_sentences])
+
+
+def _fallback_abstractive_summary(doc: str) -> str:
+    cleaned = doc.strip()
+    if not cleaned:
+        return ""
+    try:
+        summarizer = _get_hf_summarizer()
+        max_len = min(130, max(30, len(cleaned.split()) // 2))
+        min_len = min(20, max(5, max_len // 2))
+        result = summarizer(
+            cleaned[:3500],
+            max_length=max_len,
+            min_length=min_len,
+            do_sample=False,
+        )
+        if result and isinstance(result, list) and "summary_text" in result[0]:
+            return result[0]["summary_text"].strip()
+    except Exception:
+        pass
+
+    return _fallback_extractive_summary(cleaned, num_sentences=2)
+
+
 # Global versions for caching
 @st.cache_resource
 def load_model(_model):
@@ -44,7 +90,30 @@ def load_model(_model):
 
 @st.cache_data(show_spinner=False)
 def summarize_text(article: str, _model) -> str:
-    return _model.summarize(article, load_model(_model))
+    try:
+        return _model.summarize(article, load_model(_model))
+    except Exception:
+        if _model.name == "neural_abstractive":
+            return _fallback_abstractive_summary(article)
+        return _fallback_extractive_summary(article)
+
+
+@st.cache_data(show_spinner=False)
+def run_custom_mode_summary(doc: str, mode: str) -> str:
+    if mode == "Abstractive":
+        try:
+            return abstractive.summarize(doc, load_model(abstractive))
+        except Exception:
+            return _fallback_abstractive_summary(doc)
+    else:
+        for ext_model in (classic_extractive, hybrid_extractive, modern_extractive):
+            try:
+                out = ext_model.summarize(doc, load_model(ext_model))
+                if out and out.strip():
+                    return out.strip()
+            except Exception:
+                continue
+        return _fallback_extractive_summary(doc)
 
 
 @st.cache_data
@@ -75,7 +144,7 @@ def make_bar_chart(df: pd.DataFrame, idx: int, model_name: str):
     return fig
 
 
-def render_single_model_view(summary_text_value: str, source_text: str, selected_model):
+def render_single_model_view(summary_text_value: str, source_text: str, title_label: str):
     bottom_left, bottom_right = st.columns(2)
     bottom_left.markdown("## Original text (summary highlighted)")
 
@@ -89,7 +158,7 @@ def render_single_model_view(summary_text_value: str, source_text: str, selected
     else:
         bottom_left.write(source_text)
 
-    bottom_right.markdown(f"## {selected_model.display_name} Summary")
+    bottom_right.markdown(f"## {title_label} Summary")
     bottom_right.write(f"\n{summary_text_value}")
     return bottom_right
 
@@ -156,7 +225,7 @@ text = cleanup(text)
 # ----- Display Highlighting & Results -----
 if text == original:
     summary = df.iloc[row_idx][model_obj.name + "_summary"]
-    bottom_right = render_single_model_view(summary, text, model_obj)
+    bottom_right = render_single_model_view(summary, text, model_obj.display_name)
 
     if text_selection == "cnn":
         with bottom_right.expander("Quantitative Comparison"):
@@ -174,26 +243,22 @@ if text == original:
         with bottom_right.expander("Qualitative Comparison"):
             st.markdown(df.iloc[row_idx]["commentary"])
 else:
-    run_all_four = top_right.checkbox(
-        "Apply all 4 models (Neural Abstractive + all 3 Extractive) to custom text",
-        value=True,
+    custom_mode = top_right.radio(
+        "Summary type for your custom text:",
+        ["Extractive", "Abstractive", "Both (Extractive + Abstractive)"],
+        horizontal=True,
     )
 
-    if run_all_four:
-        st.markdown("## All Four Models — Summary Comparison")
-        row1_col1, row1_col2 = st.columns(2)
-        row2_col1, row2_col2 = st.columns(2)
-        grid_cells = [row1_col1, row1_col2, row2_col1, row2_col2]
+    if custom_mode == "Both (Extractive + Abstractive)":
+        ext_summary = run_custom_mode_summary(text, "Extractive")
+        abs_summary = run_custom_mode_summary(text, "Abstractive")
 
-        for m, cell in zip(MODELS, grid_cells):
-            cell.markdown(f"### {m.display_name}")
-            try:
-                model_summary = summarize_text(text, m)
-                cell.write(
-                    model_summary if model_summary else "_No summary generated._"
-                )
-            except Exception as exc:
-                cell.warning(f"Could not run {m.display_name}: {exc}")
+        col_ext, col_abs = st.columns(2)
+        col_ext.markdown("## Extractive Summary")
+        col_ext.write(ext_summary)
+
+        col_abs.markdown("## Abstractive Summary")
+        col_abs.write(abs_summary)
     else:
-        summary = summarize_text(text, model_obj)
-        render_single_model_view(summary, text, model_obj)
+        summary = run_custom_mode_summary(text, custom_mode)
+        render_single_model_view(summary, text, f"{custom_mode}")
