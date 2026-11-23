@@ -6,8 +6,7 @@ import wikipedia as wiki
 import streamlit as st
 
 st.set_page_config(
-    page_title="Natural Language Processing — Text Summarizer",
-    page_icon="📝",
+    page_title="Natural Language Processing",
     layout="wide",
 )
 
@@ -29,51 +28,22 @@ MODELS = (
     hybrid_extractive,
 )
 
-# ============ DASHBOARD STYLING ============
+# Clean, minimal responsive CSS that never blocks clicks on mobile or desktop
 st.markdown(
     """
     <style>
         .block-container {
             padding-top: 1.5rem;
-            padding-bottom: 2.5rem;
+            padding-bottom: 2rem;
         }
-        .nlp-brand-box {
-            background: linear-gradient(135deg, rgba(59, 130, 246, 0.16), rgba(16, 185, 129, 0.14));
-            border: 1px solid rgba(148, 163, 184, 0.25);
-            border-radius: 12px;
-            padding: 14px 16px;
-            margin-bottom: 14px;
-        }
-        .nlp-brand-title {
-            font-size: 1.15rem;
+        .nlp-sidebar-header {
+            font-size: 1.25rem;
             font-weight: 700;
-            letter-spacing: 0.3px;
-            color: #f8fafc;
-            margin: 0;
+            margin-bottom: 0.5rem;
         }
-        .nlp-brand-sub {
-            font-size: 0.82rem;
-            color: #94a3b8;
-            margin-top: 4px;
-        }
-        .summary-card {
-            background-color: rgba(30, 41, 59, 0.55);
-            border: 1px solid rgba(148, 163, 184, 0.2);
-            border-radius: 12px;
-            padding: 18px 20px;
-            margin-top: 8px;
-            line-height: 1.65;
-        }
-        .stat-pill {
-            display: inline-block;
-            background: rgba(59, 130, 246, 0.15);
-            border: 1px solid rgba(96, 165, 250, 0.35);
-            color: #bfdbfe;
-            padding: 4px 10px;
-            border-radius: 999px;
-            font-size: 0.8rem;
-            margin-right: 8px;
-            margin-bottom: 10px;
+        div[data-testid="stRadio"] > div {
+            flex-wrap: wrap;
+            gap: 0.5rem;
         }
     </style>
     """,
@@ -250,135 +220,109 @@ def make_bar_chart(df: pd.DataFrame, idx: int, model_name: str):
     ax.set_xticks([0, 1, 2, 3])
     ax.set_xticklabels(labels, rotation=45)
     ax.set_ylabel("ROUGE-L score")
-    fig.tight_layout()
     return fig
 
 
 def render_single_model_view(summary_text_value: str, source_text: str, title_label: str):
-    st.divider()
-    bottom_left, bottom_right = st.columns(2, gap="large")
+    bottom_left, bottom_right = st.columns(2)
+    bottom_left.markdown("## Original text (summary highlighted)")
 
-    with bottom_left:
-        st.markdown("### Original Text (Summary Highlighted)")
-        snippets = []
-        if summary_text_value:
-            snippets = match_most_text(summary_text_value, source_text)
-        st.markdown('<div class="summary-card">', unsafe_allow_html=True)
-        if snippets:
-            highlighted_article = highlight_text(snippets, source_text)
-            for paragraph in highlighted_article.split("\n"):
-                st.write(paragraph, unsafe_allow_html=True)
-        else:
-            st.write(source_text)
-        st.markdown("</div>", unsafe_allow_html=True)
+    snippets = []
+    if summary_text_value:
+        snippets = match_most_text(summary_text_value, source_text)
+    if snippets:
+        highlighted_article = highlight_text(snippets, source_text)
+        for paragraph in highlighted_article.split("\n"):
+            bottom_left.write(paragraph, unsafe_allow_html=True)
+    else:
+        bottom_left.write(source_text)
 
-    with bottom_right:
-        st.markdown(f"### {title_label} Summary")
-        word_count = len(summary_text_value.split()) if summary_text_value else 0
-        st.markdown(
-            f'<span class="stat-pill">Words: {word_count}</span>',
-            unsafe_allow_html=True,
-        )
-        st.markdown('<div class="summary-card">', unsafe_allow_html=True)
-        st.write(summary_text_value if summary_text_value else "_No summary generated._")
-        st.markdown("</div>", unsafe_allow_html=True)
-
+    bottom_right.markdown(f"## {title_label} Summary")
+    bottom_right.write(f"\n{summary_text_value}")
     return bottom_right
 
 
 # ============ SIDEBAR ============
 st.sidebar.markdown(
-    """
-    <div class="nlp-brand-box">
-        <p class="nlp-brand-title">Natural Language Processing</p>
-        <p class="nlp-brand-sub">Extractive & Abstractive Text Summarization Dashboard</p>
-    </div>
-    """,
+    '<div class="nlp-sidebar-header">Natural Language Processing</div>',
     unsafe_allow_html=True,
 )
-
 st.sidebar.markdown(
-    "Explore **extractive** and **abstractive** text summarization across classic graph methods, "
-    "sentence embeddings, and Transformer models."
+    "**Summarize.** is a text summarization prototype that demonstrates "
+    "_abstractive_ and _extractive_ summarization, and showcases Transformer-based models "
+    "as well as classic and hybrid models. Read more on our "
+    "[blog](https://blog.fastforwardlabs.com/2021/09/22/automatic-summarization-from-textrank-to-transformers.html)."
 )
-st.sidebar.divider()
 
 # ----- Model Selection -----
 model_selector = {m.display_name: m for m in MODELS}
 model_obj = model_selector[
-    st.sidebar.selectbox("Choose a summarization model", list(model_selector.keys()))
+    st.sidebar.selectbox("Choose a summarization model.", list(model_selector.keys()))
 ]
-st.sidebar.markdown("#### Model Description")
+st.sidebar.markdown("#### Model description")
 st.sidebar.markdown(model_obj.description, unsafe_allow_html=True)
 
 # ============ MAIN PAGE ============
-top_left, top_right = st.columns([1, 1.35], gap="large")
 
-with top_left:
-    st.title("Summarize.")
-    st.caption("Compare extractive and abstractive summaries on sample datasets or your own text.")
+# ----- Display ToC and Text Box -----
+top_left, top_right = st.columns(2)
+top_left.title("Summarize.")
 
-    text_options = {
-        "Excerpts from Wikipedia page on Machine Learning": "wiki",
-        "Articles from the CNN/Daily News dataset": "cnn",
-    }
-    text_selection = st.selectbox("Choose a dataset", list(text_options.keys()))
-    text_selection = text_options[text_selection]
+# ----- Text Selection -----
+text_options = {
+    "Excerpts from Wikipedia page on Machine Learning": "wiki",
+    "Articles from the CNN/Daily News dataset": "cnn",
+}
+text_selection = top_left.selectbox("Choose a dataset.", list(text_options.keys()))
+text_selection = text_options[text_selection]
 
-    if text_selection == "wiki":
-        df = load_data(text_selection)
-        df.fillna("", inplace=True)
-        excerpt_map = {r.heading: i for i, r in df.iterrows()}
-        st.subheader("Table of Contents")
-        selection = st.selectbox(
-            "Choose an excerpt to summarize", list(excerpt_map.keys())
-        )
-        row_idx = excerpt_map[selection]
-    else:
-        df = load_data(text_selection)
-        article_map = {r.title: i for i, r in df.iterrows()}
-        st.subheader("Articles")
-        selection = st.selectbox(
-            "Choose a news article", list(article_map.keys())
-        )
-        row_idx = article_map[selection]
-
-article = df.iloc[row_idx]["article"]
-original = cleanup(article)
-
-with top_right:
-    text = st.text_area(
-        "Subsection text — or enter your own text to summarize!",
-        article,
-        height=290,
+# ----- Load Stuff -----
+if text_selection == "wiki":
+    df = load_data(text_selection)
+    df.fillna("", inplace=True)
+    text_options = {r.heading: i for i, r in df.iterrows()}
+    top_left.subheader("Table of Contents")
+    selection = top_left.selectbox(
+        "Choose an excerpt to summarize.", list(text_options.keys())
     )
-    text = cleanup(text)
-    st.caption(f"Input length: {len(text.split())} words")
+else:
+    df = load_data(text_selection)
+    text_options = {r.title: i for i, r in df.iterrows()}
+    selection = top_left.selectbox(
+        "Choose a news article.", list(text_options.keys())
+    )
+
+row_idx = text_options[selection]
+article = df.iloc[row_idx]["article"]
+
+original = cleanup(article)
+text = top_right.text_area(
+    "Subection text -- or enter your own text to summarize!", article, height=300
+)
+text = cleanup(text)
 
 # ----- Display Highlighting & Results -----
 if text == original:
     summary = df.iloc[row_idx][model_obj.name + "_summary"]
     bottom_right = render_single_model_view(summary, text, model_obj.display_name)
 
-    with bottom_right:
-        if text_selection == "cnn":
-            with st.expander("Quantitative Comparison"):
-                st.write(
-                    "Because the CNN/Daily Mail dataset includes gold standard summaries, "
-                    "we can do a quantitative comparison with our model output. The standard approach "
-                    "is to compute the ROUGE score between the model's output and the gold standard."
-                )
-                st.pyplot(make_bar_chart(df, row_idx, model_obj.display_name))
-                st.write(
-                    "There are several flavors of ROUGE score. ROUGE-L considers the longest "
-                    "common subsequence in the summary."
-                )
-        if text_selection == "wiki":
-            with st.expander("Qualitative Comparison"):
-                st.markdown(df.iloc[row_idx]["commentary"])
+    if text_selection == "cnn":
+        with bottom_right.expander("Quantitative Comparison"):
+            st.write(
+                "Because the CNN/Daily Mail dataset includes gold standard summaries, "
+                "we can do a quantitative comparison with our model output. The standard approach "
+                "is to compute the ROUGE score between the model's output and the gold standard."
+            )
+            st.pyplot(make_bar_chart(df, row_idx, model_obj.display_name))
+            st.write(
+                "There are several flavors of ROUGE score. ROUGE-L considers the longest "
+                "common subsequence in the summary."
+            )
+    if text_selection == "wiki":
+        with bottom_right.expander("Qualitative Comparison"):
+            st.markdown(df.iloc[row_idx]["commentary"])
 else:
-    st.divider()
-    custom_mode = st.radio(
+    custom_mode = top_right.radio(
         "Summary type for your custom text:",
         ["Extractive", "Abstractive", "Both (Extractive + Abstractive)"],
         horizontal=True,
@@ -388,26 +332,12 @@ else:
         ext_summary = run_custom_mode_summary(text, "Extractive")
         abs_summary = run_custom_mode_summary(text, "Abstractive")
 
-        col_ext, col_abs = st.columns(2, gap="large")
-        with col_ext:
-            st.markdown("### Extractive Summary")
-            st.markdown(
-                f'<span class="stat-pill">Words: {len(ext_summary.split()) if ext_summary else 0}</span>',
-                unsafe_allow_html=True,
-            )
-            st.markdown('<div class="summary-card">', unsafe_allow_html=True)
-            st.write(ext_summary if ext_summary else "_No extractive summary generated._")
-            st.markdown("</div>", unsafe_allow_html=True)
+        col_ext, col_abs = st.columns(2)
+        col_ext.markdown("## Extractive Summary")
+        col_ext.write(ext_summary)
 
-        with col_abs:
-            st.markdown("### Abstractive Summary")
-            st.markdown(
-                f'<span class="stat-pill">Words: {len(abs_summary.split()) if abs_summary else 0}</span>',
-                unsafe_allow_html=True,
-            )
-            st.markdown('<div class="summary-card">', unsafe_allow_html=True)
-            st.write(abs_summary if abs_summary else "_No abstractive summary generated._")
-            st.markdown("</div>", unsafe_allow_html=True)
+        col_abs.markdown("## Abstractive Summary")
+        col_abs.write(abs_summary)
     else:
         summary = run_custom_mode_summary(text, custom_mode)
         render_single_model_view(summary, text, custom_mode)
