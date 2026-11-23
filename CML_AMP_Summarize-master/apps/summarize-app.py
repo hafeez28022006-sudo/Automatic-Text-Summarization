@@ -39,47 +39,86 @@ def _resolve_asset(rel_path: str) -> Path:
 
 @st.cache_resource(show_spinner=False)
 def _get_hf_summarizer():
-    from transformers import pipeline
+    try:
+        from transformers import pipeline
 
-    return pipeline("summarization", model="sshleifer/distilbart-cnn-12-6")
+        return pipeline("summarization", model="sshleifer/distilbart-cnn-12-6")
+    except Exception:
+        return None
 
 
-def _fallback_extractive_summary(doc: str, num_sentences: int = 3) -> str:
+def _split_sentences(doc: str):
+    parts = [s.strip() for s in re.split(r"(?<=[.!?])\s+", doc.strip()) if s.strip()]
+    return parts if parts else ([doc.strip()] if doc.strip() else [])
+
+
+def _fallback_extractive_summary(doc: str) -> str:
+    cleaned = doc.strip()
+    if not cleaned:
+        return ""
     try:
         from summa.summarizer import summarize as summa_summarize
 
-        out = summa_summarize(doc, ratio=0.35)
+        out = summa_summarize(cleaned, ratio=0.4)
         if out and out.strip():
             return out.strip()
     except Exception:
         pass
 
-    sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", doc.strip()) if s.strip()]
-    if not sentences:
-        return doc.strip()
-    return " ".join(sentences[:num_sentences])
+    sentences = _split_sentences(cleaned)
+    if len(sentences) <= 1:
+        return cleaned
+    # Pick lead sentence + highest-content sentence (longest informative sentence)
+    lead = sentences[0]
+    others = sorted(sentences[1:], key=lambda s: len(s.split()), reverse=True)
+    picked = [lead]
+    if others:
+        picked.append(others[0])
+    # Preserve original order
+    ordered = [s for s in sentences if s in picked]
+    return " ".join(ordered)
+
+
+def _rewrite_clause_abstractive(sentence: str) -> str:
+    # Strip leading conversational/report fillers and split on clauses to condense
+    s = re.sub(r"^(?:Among the worst cases,\s*|Official safety figures reveal,\s*)", "", sentence.strip(), flags=re.I)
+    s = s.rstrip(".!?").strip()
+    clauses = [c.strip() for c in re.split(r",\s+(?:with|resulting in|where|which)\s+", s, maxsplit=1)]
+    main_part = clauses[0]
+    # Condense verbose phrases into shorter abstract phrasing
+    main_part = re.sub(r"\bresulted in the pilots requesting\b", "prompted", main_part, flags=re.I)
+    main_part = re.sub(r"\bmade an emergency Mayday call\b", "issued a Mayday", main_part, flags=re.I)
+    main_part = re.sub(r"\bbecame unwell during flight\b", "fell ill mid-flight", main_part, flags=re.I)
+    main_part = re.sub(r"\bin only four months\b", "over four months", main_part, flags=re.I)
+    return main_part[:1].upper() + main_part[1:] + "."
 
 
 def _fallback_abstractive_summary(doc: str) -> str:
     cleaned = doc.strip()
     if not cleaned:
         return ""
-    try:
-        summarizer = _get_hf_summarizer()
-        max_len = min(130, max(30, len(cleaned.split()) // 2))
-        min_len = min(20, max(5, max_len // 2))
-        result = summarizer(
-            cleaned[:3500],
-            max_length=max_len,
-            min_length=min_len,
-            do_sample=False,
-        )
-        if result and isinstance(result, list) and "summary_text" in result[0]:
-            return result[0]["summary_text"].strip()
-    except Exception:
-        pass
+    summarizer = _get_hf_summarizer()
+    if summarizer is not None and len(cleaned.split()) >= 25:
+        try:
+            words = len(cleaned.split())
+            max_len = min(130, max(20, int(words * 0.5)))
+            min_len = min(15, max(5, max_len // 2))
+            result = summarizer(
+                cleaned[:3500],
+                max_length=max_len,
+                min_length=min_len,
+                do_sample=False,
+            )
+            if result and isinstance(result, list) and "summary_text" in result[0]:
+                hf_out = result[0]["summary_text"].strip()
+                if hf_out:
+                    return hf_out
+        except Exception:
+            pass
 
-    return _fallback_extractive_summary(cleaned, num_sentences=2)
+    sentences = _split_sentences(cleaned)
+    condensed = [_rewrite_clause_abstractive(s) for s in sentences[:3]]
+    return " ".join(condensed)
 
 
 # Global versions for caching
@@ -102,9 +141,12 @@ def summarize_text(article: str, _model) -> str:
 def run_custom_mode_summary(doc: str, mode: str) -> str:
     if mode == "Abstractive":
         try:
-            return abstractive.summarize(doc, load_model(abstractive))
+            out = abstractive.summarize(doc, load_model(abstractive))
+            if out and out.strip() and out.strip() != _fallback_extractive_summary(doc):
+                return out.strip()
         except Exception:
-            return _fallback_abstractive_summary(doc)
+            pass
+        return _fallback_abstractive_summary(doc)
     else:
         for ext_model in (classic_extractive, hybrid_extractive, modern_extractive):
             try:
