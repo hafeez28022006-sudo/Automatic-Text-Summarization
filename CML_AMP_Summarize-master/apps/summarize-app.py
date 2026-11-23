@@ -75,6 +75,25 @@ def make_bar_chart(df: pd.DataFrame, idx: int, model_name: str):
     return fig
 
 
+def render_single_model_view(summary_text_value: str, source_text: str, selected_model):
+    bottom_left, bottom_right = st.columns(2)
+    bottom_left.markdown("## Original text (summary highlighted)")
+
+    snippets = []
+    if summary_text_value:
+        snippets = match_most_text(summary_text_value, source_text)
+    if snippets:
+        highlighted_article = highlight_text(snippets, source_text)
+        for paragraph in highlighted_article.split("\n"):
+            bottom_left.write(paragraph, unsafe_allow_html=True)
+    else:
+        bottom_left.write(source_text)
+
+    bottom_right.markdown(f"## {selected_model.display_name} Summary")
+    bottom_right.write(f"\n{summary_text_value}")
+    return bottom_right
+
+
 # ============ SIDEBAR ============
 logo_path = _resolve_asset("images/fflogo1@1x.png")
 if logo_path.exists():
@@ -134,32 +153,11 @@ text = top_right.text_area(
 )
 text = cleanup(text)
 
+# ----- Display Highlighting & Results -----
 if text == original:
     summary = df.iloc[row_idx][model_obj.name + "_summary"]
-else:
-    # ----- Summarize Text -----
-    summary = summarize_text(text, model_obj)
+    bottom_right = render_single_model_view(summary, text, model_obj)
 
-# ----- Display Highlighting & Results -----
-bottom_left, bottom_right = st.columns(2)
-bottom_left.markdown("## Original text (summary highlighted)")
-
-# ----- Highlighting -----
-snippets = []
-if summary:
-    snippets = match_most_text(summary, text)
-if snippets:
-    highlighted_article = highlight_text(snippets, text)
-    for paragraph in highlighted_article.split("\n"):
-        bottom_left.write(paragraph, unsafe_allow_html=True)
-else:
-    bottom_left.write(text)
-
-# ----- Results -----
-bottom_right.markdown(f"## {model_obj.display_name} Summary")
-bottom_right.write(f"\n{summary}")
-
-if text == original:
     if text_selection == "cnn":
         with bottom_right.expander("Quantitative Comparison"):
             st.write(
@@ -175,3 +173,27 @@ if text == original:
     if text_selection == "wiki":
         with bottom_right.expander("Qualitative Comparison"):
             st.markdown(df.iloc[row_idx]["commentary"])
+else:
+    run_all_four = top_right.checkbox(
+        "Apply all 4 models (Neural Abstractive + all 3 Extractive) to custom text",
+        value=True,
+    )
+
+    if run_all_four:
+        st.markdown("## All Four Models — Summary Comparison")
+        row1_col1, row1_col2 = st.columns(2)
+        row2_col1, row2_col2 = st.columns(2)
+        grid_cells = [row1_col1, row1_col2, row2_col1, row2_col2]
+
+        for m, cell in zip(MODELS, grid_cells):
+            cell.markdown(f"### {m.display_name}")
+            try:
+                model_summary = summarize_text(text, m)
+                cell.write(
+                    model_summary if model_summary else "_No summary generated._"
+                )
+            except Exception as exc:
+                cell.warning(f"Could not run {m.display_name}: {exc}")
+    else:
+        summary = summarize_text(text, model_obj)
+        render_single_model_view(summary, text, model_obj)
