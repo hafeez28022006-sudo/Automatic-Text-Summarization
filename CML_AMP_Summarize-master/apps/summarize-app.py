@@ -44,9 +44,8 @@ import wikipedia as wiki
 import streamlit as st
 st.set_page_config(layout="wide")
 
-from summa.utils import cleanup
-from summa.highlighting import match_most_text, highlight_text
-
+from text_highlighting import cleanup
+from text_highlighting import match_most_text, highlight_text
 from st_model_wrappers import (
     abstractive, 
     modern_extractive, 
