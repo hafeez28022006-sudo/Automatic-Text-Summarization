@@ -2,7 +2,6 @@ from pathlib import Path
 import re
 import matplotlib.pyplot as plt
 import pandas as pd
-import wikipedia as wiki
 import streamlit as st
 
 st.set_page_config(
@@ -10,8 +9,7 @@ st.set_page_config(
     layout="wide",
 )
 
-from text_highlighting import cleanup
-from text_highlighting import match_most_text, highlight_text
+from text_highlighting import cleanup, match_most_text, highlight_text
 from st_model_wrappers import (
     abstractive,
     modern_extractive,
@@ -36,17 +34,18 @@ SAMPLE_CUSTOM_TEXT = (
     "generate concise new phrasing that captures the core ideas."
 )
 
+# Simple, safe spacing so buttons never clip on laptop or mobile
 st.markdown(
     """
     <style>
         .block-container {
-            padding-top: 1.5rem;
+            padding-top: 2.5rem;
             padding-bottom: 2rem;
         }
-        .nlp-sidebar-header {
+        .nlp-sidebar-title {
             font-size: 1.25rem;
             font-weight: 700;
-            margin-bottom: 0.5rem;
+            margin-bottom: 0.4rem;
         }
         div[data-testid="stRadio"] > div {
             flex-wrap: wrap;
@@ -101,6 +100,7 @@ def _fallback_extractive_summary(doc: str, num_sentences: int = 3) -> str:
     sentences = _split_sentences(cleaned)
     if len(sentences) <= num_sentences:
         return " ".join(sentences)
+
     lead = sentences[0]
     others = sorted(sentences[1:], key=lambda s: len(s.split()), reverse=True)
     picked = {lead}
@@ -142,6 +142,7 @@ def _fallback_abstractive_summary(doc: str, max_words: int = 80) -> str:
     cleaned = doc.strip()
     if not cleaned:
         return ""
+
     summarizer = _get_hf_summarizer()
     if summarizer is not None and len(cleaned.split()) >= 25:
         try:
@@ -185,32 +186,38 @@ def summarize_text(article: str, _model) -> str:
 
 
 @st.cache_data(show_spinner=False)
-def run_custom_mode_summary(doc: str, mode: str, num_sentences: int = 3, max_words: int = 80) -> str:
+def run_custom_mode_summary(
+    doc: str, mode: str, num_sentences: int = 3, max_words: int = 80
+) -> str:
     if mode == "Abstractive":
         try:
             out = abstractive.summarize(doc, load_model(abstractive))
-            if out and out.strip() and out.strip() != _fallback_extractive_summary(doc, num_sentences):
+            if (
+                out
+                and out.strip()
+                and out.strip() != _fallback_extractive_summary(doc, num_sentences)
+            ):
                 return out.strip()
         except Exception:
             pass
         return _fallback_abstractive_summary(doc, max_words=max_words)
-    else:
-        for ext_model in (classic_extractive, hybrid_extractive, modern_extractive):
-            try:
-                out = ext_model.summarize(doc, load_model(ext_model))
-                if out and out.strip():
-                    sents = _split_sentences(out.strip())
-                    return " ".join(sents[: max(1, num_sentences)])
-            except Exception:
-                continue
-        return _fallback_extractive_summary(doc, num_sentences=num_sentences)
+
+    for ext_model in (classic_extractive, hybrid_extractive, modern_extractive):
+        try:
+            out = ext_model.summarize(doc, load_model(ext_model))
+            if out and out.strip():
+                sents = _split_sentences(out.strip())
+                return " ".join(sents[: max(1, num_sentences)])
+        except Exception:
+            continue
+    return _fallback_extractive_summary(doc, num_sentences=num_sentences)
 
 
 @st.cache_data
 def load_data(selection: str) -> pd.DataFrame:
     if selection == "wiki":
         return pd.read_csv(_resolve_asset("data/wikipedia/ml_excerpts.pd"))
-    elif selection == "cnn":
+    if selection == "cnn":
         return pd.read_csv(_resolve_asset("data/cnn_dailymail/sAMPLE.pd"))
     raise ValueError(f"Unknown dataset selection: {selection}")
 
@@ -234,7 +241,7 @@ def make_bar_chart(df: pd.DataFrame, idx: int, model_name: str):
     return fig
 
 
-def _render_summary_metrics_and_download(summary_text_value: str, source_text: str, filename_prefix: str):
+def _render_summary_footer(summary_text_value: str, source_text: str, label: str):
     src_words = len(source_text.split()) if source_text else 0
     sum_words = len(summary_text_value.split()) if summary_text_value else 0
     ratio = round((sum_words / src_words) * 100, 1) if src_words > 0 else 0.0
@@ -243,18 +250,19 @@ def _render_summary_metrics_and_download(summary_text_value: str, source_text: s
         st.download_button(
             label="Download Summary (.txt)",
             data=summary_text_value,
-            file_name=f"{filename_prefix.lower().replace(' ', '_')}_summary.txt",
+            file_name=f"{label.lower().replace(' ', '_')}_summary.txt",
             mime="text/plain",
+            key=f"dl_{label}_{hash(summary_text_value)}",
         )
 
 
-def render_single_model_view(summary_text_value: str, source_text: str, title_label: str):
+def render_single_model_view(
+    summary_text_value: str, source_text: str, title_label: str
+):
     bottom_left, bottom_right = st.columns(2)
-    bottom_left.markdown("## Original text (summary highlighted)")
 
-    snippets = []
-    if summary_text_value:
-        snippets = match_most_text(summary_text_value, source_text)
+    bottom_left.markdown("## Original text (summary highlighted)")
+    snippets = match_most_text(summary_text_value, source_text) if summary_text_value else []
     if snippets:
         highlighted_article = highlight_text(snippets, source_text)
         for paragraph in highlighted_article.split("\n"):
@@ -265,13 +273,14 @@ def render_single_model_view(summary_text_value: str, source_text: str, title_la
     bottom_right.markdown(f"## {title_label} Summary")
     bottom_right.write(f"\n{summary_text_value}")
     with bottom_right:
-        _render_summary_metrics_and_download(summary_text_value, source_text, title_label)
+        _render_summary_footer(summary_text_value, source_text, title_label)
+
     return bottom_right
 
 
 # ============ SIDEBAR ============
 st.sidebar.markdown(
-    '<div class="nlp-sidebar-header">Natural Language Processing</div>',
+    '<div class="nlp-sidebar-title">Natural Language Processing</div>',
     unsafe_allow_html=True,
 )
 st.sidebar.markdown(
@@ -320,18 +329,17 @@ else:
 article = df.iloc[row_idx]["article"]
 original = cleanup(article)
 
-# Sync custom editor state when dataset/row changes
 editor_key = "custom_text_editor"
-state_source_key = "last_loaded_article"
-if st.session_state.get(state_source_key) != article:
-    st.session_state[state_source_key] = article
+source_tracker_key = "last_loaded_article"
+if st.session_state.get(source_tracker_key) != article:
+    st.session_state[source_tracker_key] = article
     st.session_state[editor_key] = article
 
-btn_col1, btn_col2, _ = top_right.columns([1, 1.2, 1.8])
-if btn_col1.button("Clear Text"):
+btn_left, btn_right, _ = top_right.columns([1, 1.2, 1.8])
+if btn_left.button("Clear Text"):
     st.session_state[editor_key] = ""
     st.rerun()
-if btn_col2.button("Load Sample"):
+if btn_right.button("Load Sample"):
     st.session_state[editor_key] = SAMPLE_CUSTOM_TEXT
     st.rerun()
 
@@ -342,8 +350,11 @@ raw_text = top_right.text_area(
 )
 text = cleanup(raw_text)
 
+# ----- Display Highlighting & Results -----
 if not text.strip():
-    st.info("Enter or paste your own text in the box above (or click **Load Sample**) to generate a summary.")
+    st.info(
+        "Enter or paste your own text in the box above (or click **Load Sample**) to summarize."
+    )
 elif text == original:
     summary = df.iloc[row_idx][model_obj.name + "_summary"]
     bottom_right = render_single_model_view(summary, text, model_obj.display_name)
@@ -370,23 +381,31 @@ else:
         ["Extractive", "Abstractive", "Both (Extractive + Abstractive)"],
         horizontal=True,
     )
-    num_sentences = ctrl_right.slider("Sentences / target length", min_value=1, max_value=6, value=3)
+    num_sentences = ctrl_right.slider(
+        "Sentences / target length", min_value=1, max_value=6, value=3
+    )
     max_words = max(35, num_sentences * 25)
 
     if custom_mode == "Both (Extractive + Abstractive)":
-        ext_summary = run_custom_mode_summary(text, "Extractive", num_sentences=num_sentences, max_words=max_words)
-        abs_summary = run_custom_mode_summary(text, "Abstractive", num_sentences=num_sentences, max_words=max_words)
+        ext_summary = run_custom_mode_summary(
+            text, "Extractive", num_sentences=num_sentences, max_words=max_words
+        )
+        abs_summary = run_custom_mode_summary(
+            text, "Abstractive", num_sentences=num_sentences, max_words=max_words
+        )
 
         col_ext, col_abs = st.columns(2)
         col_ext.markdown("## Extractive Summary")
         col_ext.write(ext_summary)
         with col_ext:
-            _render_summary_metrics_and_download(ext_summary, text, "Extractive")
+            _render_summary_footer(ext_summary, text, "Extractive")
 
         col_abs.markdown("## Abstractive Summary")
         col_abs.write(abs_summary)
         with col_abs:
-            _render_summary_metrics_and_download(abs_summary, text, "Abstractive")
+            _render_summary_footer(abs_summary, text, "Abstractive")
     else:
-        summary = run_custom_mode_summary(text, custom_mode, num_sentences=num_sentences, max_words=max_words)
+        summary = run_custom_mode_summary(
+            text, custom_mode, num_sentences=num_sentences, max_words=max_words
+        )
         render_single_model_view(summary, text, custom_mode)
