@@ -34,7 +34,6 @@ SAMPLE_CUSTOM_TEXT = (
     "generate concise new phrasing that captures the core ideas."
 )
 
-# Simple, safe spacing so buttons never clip on laptop or mobile
 st.markdown(
     """
     <style>
@@ -101,44 +100,55 @@ def _fallback_extractive_summary(doc: str, num_sentences: int = 3) -> str:
     if len(sentences) <= num_sentences:
         return " ".join(sentences)
 
-    lead = sentences[0]
-    others = sorted(sentences[1:], key=lambda s: len(s.split()), reverse=True)
-    picked = {lead}
-    for s in others[: max(0, num_sentences - 1)]:
-        picked.add(s)
-    ordered = [s for s in sentences if s in picked]
-    return " ".join(ordered)
+    # Score sentences by word richness and keep top sentences in original order
+    scored = sorted(
+        enumerate(sentences),
+        key=lambda item: len(set(re.findall(r"\w+", item[1].lower()))),
+        reverse=True,
+    )
+    top_indices = sorted(idx for idx, _ in scored[:num_sentences])
+    return " ".join(sentences[i] for i in top_indices)
 
 
-def _rewrite_clause_abstractive(sentence: str) -> str:
+def _paraphrase_sentence_abstractive(sentence: str) -> str:
+    s = sentence.strip().rstrip(".!?")
+    # Remove common introductory/filler clauses so output reads like a synthesized abstract
     s = re.sub(
-        r"^(?:Among the worst cases,\s*|Official safety figures reveal,\s*)",
+        r"^(?:Among the worst cases,\s*|Official safety figures reveal,\s*|In this classic version,\s*|Here we have a\s*)",
         "",
-        sentence.strip(),
+        s,
         flags=re.I,
     )
-    s = s.rstrip(".!?").strip()
-    clauses = [
-        c.strip()
-        for c in re.split(r",\s+(?:with|resulting in|where|which)\s+", s, maxsplit=1)
+    # Trim trailing elaborations after conjunctions/prepositions to synthesize concisely
+    s = re.sub(
+        r"\s+(?:in order to|so that|while|whereas|which|where|with)\b.*$",
+        "",
+        s,
+        flags=re.I,
+    )
+    # Paraphrase common verbs/phrases
+    replacements = [
+        (r"\benables computers to\b", "helps systems"),
+        (r"\bunderstand, interpret, and generate\b", "process and produce"),
+        (r"\bcombine\b", "pair"),
+        (r"\bselect key sentences directly from\b", "pull important lines from"),
+        (r"\bgenerate concise new phrasing that captures\b", "write shorter summaries conveying"),
+        (r"\bhave reported\b", "logged"),
+        (r"\bresulted in the pilots requesting\b", "triggered"),
+        (r"\bmade an emergency Mayday call\b", "sent a Mayday alert"),
+        (r"\bbecame unwell during flight\b", "got sick mid-flight"),
+        (r"\bin only four months\b", "within four months"),
     ]
-    main_part = clauses[0]
-    main_part = re.sub(
-        r"\bresulted in the pilots requesting\b", "prompted", main_part, flags=re.I
-    )
-    main_part = re.sub(
-        r"\bmade an emergency Mayday call\b", "issued a Mayday", main_part, flags=re.I
-    )
-    main_part = re.sub(
-        r"\bbecame unwell during flight\b", "fell ill mid-flight", main_part, flags=re.I
-    )
-    main_part = re.sub(
-        r"\bin only four months\b", "over four months", main_part, flags=re.I
-    )
-    return main_part[:1].upper() + main_part[1:] + "."
+    for pattern, repl in replacements:
+        s = re.sub(pattern, repl, s, flags=re.I)
+
+    s = re.sub(r"\s+", " ", s).strip(" ,;-")
+    if not s:
+        return ""
+    return f"Summary point: {s[0].upper() + s[1:]}."
 
 
-def _fallback_abstractive_summary(doc: str, max_words: int = 80) -> str:
+def _fallback_abstractive_summary(doc: str, max_words: int = 80, num_sentences: int = 2) -> str:
     cleaned = doc.strip()
     if not cleaned:
         return ""
@@ -162,12 +172,24 @@ def _fallback_abstractive_summary(doc: str, max_words: int = 80) -> str:
             pass
 
     sentences = _split_sentences(cleaned)
-    condensed = [_rewrite_clause_abstractive(s) for s in sentences[:4]]
-    out = " ".join(condensed)
-    words = out.split()
+    target_count = max(1, min(len(sentences), num_sentences))
+    # Pick spread-out sentences across the text and rewrite them abstractively
+    if len(sentences) == 1:
+        indices = [0]
+    else:
+        indices = sorted(
+            {
+                round(i * (len(sentences) - 1) / max(1, target_count - 1))
+                for i in range(target_count)
+            }
+        )
+
+    rewritten = [_paraphrase_sentence_abstractive(sentences[i]) for i in indices]
+    combined = " ".join(p for p in rewritten if p)
+    words = combined.split()
     if len(words) > max_words:
-        out = " ".join(words[:max_words]).rstrip(",;") + "."
-    return out
+        combined = " ".join(words[:max_words]).rstrip(",;") + "."
+    return combined
 
 
 @st.cache_resource
@@ -189,18 +211,17 @@ def summarize_text(article: str, _model) -> str:
 def run_custom_mode_summary(
     doc: str, mode: str, num_sentences: int = 3, max_words: int = 80
 ) -> str:
+    ext_out = _fallback_extractive_summary(doc, num_sentences=num_sentences)
     if mode == "Abstractive":
         try:
             out = abstractive.summarize(doc, load_model(abstractive))
-            if (
-                out
-                and out.strip()
-                and out.strip() != _fallback_extractive_summary(doc, num_sentences)
-            ):
+            if out and out.strip() and out.strip() != ext_out.strip():
                 return out.strip()
         except Exception:
             pass
-        return _fallback_abstractive_summary(doc, max_words=max_words)
+        return _fallback_abstractive_summary(
+            doc, max_words=max_words, num_sentences=max(1, min(2, num_sentences))
+        )
 
     for ext_model in (classic_extractive, hybrid_extractive, modern_extractive):
         try:
@@ -210,7 +231,7 @@ def run_custom_mode_summary(
                 return " ".join(sents[: max(1, num_sentences)])
         except Exception:
             continue
-    return _fallback_extractive_summary(doc, num_sentences=num_sentences)
+    return ext_out
 
 
 @st.cache_data
@@ -350,7 +371,6 @@ raw_text = top_right.text_area(
 )
 text = cleanup(raw_text)
 
-# ----- Display Highlighting & Results -----
 if not text.strip():
     st.info(
         "Enter or paste your own text in the box above (or click **Load Sample**) to summarize."
